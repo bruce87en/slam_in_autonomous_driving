@@ -9,6 +9,8 @@
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
 
+#include <liblas/liblas.hpp>
+
 #include "common/eigen_types.h"
 #include "common/point_cloud_utils.h"
 #include "keyframe.h"
@@ -30,6 +32,25 @@ int main(int argc, char** argv) {
         LOG(ERROR) << "failed to load keyframes";
         return 0;
     }
+
+    std::system("mkdir -p ./data/ch9/map_data/");
+    std::system("rm -rf ./data/ch9/map_data/*");  // 清理一下文件夹
+
+    // create las file
+    std::ofstream las_ofs;
+    liblas::Header las_header;
+    if (liblas::Create(las_ofs, "./data/ch9/map_data/map.las") == false) {
+        LOG(ERROR) << "open las failed";
+        return 0;
+    }
+    las_header.SetVersionMajor(1);
+    las_header.SetVersionMinor(2);
+    las_header.SetDataFormatId(liblas::ePointFormat1);
+    las_header.SetScale(0.001, 0.001, 0.001);
+    las_header.SetMin(-1000, -1000, -1000);
+    las_header.SetMax(1000, 1000, 1000);
+    auto las_writer = std::make_shared<liblas::Writer>(las_ofs, las_header);
+    las_writer->WriteHeader();
 
     std::map<Vec2i, CloudPtr, less_vec<2>> map_data;  // 以网格ID为索引的地图数据
     pcl::VoxelGrid<PointType> voxel_grid_filter;
@@ -67,13 +88,17 @@ int main(int argc, char** argv) {
             } else {
                 iter->second->points.emplace_back(pt);
             }
+
+            // write las
+            liblas::Point point(&las_header);
+            point.SetCoordinates(pt.x, pt.y, pt.z);
+            point.SetIntensity((uint16_t)pt.intensity);
+            las_writer->WritePoint(point);
         }
     }
 
     // 存储点云和索引文件
     LOG(INFO) << "saving maps, grids: " << map_data.size();
-    std::system("mkdir -p ./data/ch9/map_data/");
-    std::system("rm -rf ./data/ch9/map_data/*");  // 清理一下文件夹
     std::ofstream fout("./data/ch9/map_data/map_index.txt");
     for (auto& dp : map_data) {
         fout << dp.first[0] << " " << dp.first[1] << std::endl;

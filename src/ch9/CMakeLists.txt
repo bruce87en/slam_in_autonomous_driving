@@ -1,3 +1,5 @@
+add_subdirectory(libLAS)
+
 add_library(${PROJECT_NAME}.ch9
         frontend.cc
         keyframe.cc
@@ -50,4 +52,5 @@ target_link_libraries(split_map
         ${PROJECT_NAME}.ch9
         ${PROJECT_NAME}.common
         ${third_party_libs}
+        las
         )
