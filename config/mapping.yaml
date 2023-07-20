@@ -15,6 +15,7 @@ lidar_continuous_num: 5
 rtk_ext:
   t: [0, 0.24, -0.283]
 loop_closing:
+  matching_method: 2 # 1.PCL NDT 2. SAD NDT
   min_id_interval: 100
   min_distance: 30
   skip_id: 5

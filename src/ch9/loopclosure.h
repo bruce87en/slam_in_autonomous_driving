@@ -26,6 +26,11 @@ struct LoopCandidate {
 
 class LoopClosure {
    public:
+    enum MatchingMethod {
+        kMatchingMethodPclNdt = 1,
+        kMatchingMethodSadNdt = 2,
+    };
+
     explicit LoopClosure(const std ::string& config_yaml);
 
     bool Init();
@@ -55,6 +60,8 @@ class LoopClosure {
     std::map<IdType, KFPtr> keyframes_;
 
     std::string yaml_;
+
+    MatchingMethod matching_method_{kMatchingMethodPclNdt};
 };
 }  // namespace sad
 

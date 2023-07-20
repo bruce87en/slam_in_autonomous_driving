@@ -82,6 +82,8 @@ class Ndt3d {
     /// 使用gauss-newton方法进行ndt配准
     bool AlignNdt(SE3& init_pose);
 
+    double GetMatchingScore();
+
    private:
     void BuildVoxels();
 
@@ -101,6 +103,8 @@ class Ndt3d {
 
     std::unordered_map<KeyType, VoxelData, hash_vec<3>> grids_;  // 栅格数据
     std::vector<KeyType> nearby_grids_;                          // 附近的栅格
+
+    double matching_score_;
 };
 
 }  // namespace sad

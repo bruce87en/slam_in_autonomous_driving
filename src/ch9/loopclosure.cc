@@ -11,6 +11,7 @@
 #include <yaml-cpp/yaml.h>
 #include <execution>
 
+#include "ch7/ndt_3d.h"
 #include "common/lidar_utils.h"
 #include "common/point_cloud_utils.h"
 
@@ -30,6 +31,12 @@ bool LoopClosure::Init() {
     min_distance_ = yaml["loop_closing"]["min_distance"].as<double>();
     skip_id_ = yaml["loop_closing"]["skip_id"].as<int>();
     ndt_score_th_ = yaml["loop_closing"]["ndt_score_th"].as<double>();
+
+    int matching_method = yaml["loop_closing"]["matching_method"].as<int>();
+    matching_method_ = (MatchingMethod)matching_method;
+
+    LOG(INFO) << "matching method " << matching_method_;
+
     return true;
 }
 
@@ -151,34 +158,75 @@ void LoopClosure::ComputeForCandidate(sad::LoopCandidate& c) {
         return;
     }
 
-    pcl::NormalDistributionsTransform<PointType, PointType> ndt;
-
-    ndt.setTransformationEpsilon(0.05);
-    ndt.setStepSize(0.7);
-    ndt.setMaximumIterations(40);
-
-    Mat4f Tw2 = kf2->opti_pose_1_.matrix().cast<float>();
-
-    /// 不同分辨率下的匹配
-    CloudPtr output(new PointCloudType);
+    SE3 T2;
+    double ndt_score  = 0;
     std::vector<double> res{10.0, 5.0, 4.0, 3.0};
-    for (auto& r : res) {
-        ndt.setResolution(r);
-        auto rough_map1 = VoxelCloud(submap_kf1, r * 0.1);
-        auto rough_map2 = VoxelCloud(submap_kf2, r * 0.1);
-        ndt.setInputTarget(rough_map1);
-        ndt.setInputSource(rough_map2);
 
-        ndt.align(*output, Tw2);
-        Tw2 = ndt.getFinalTransformation();
+    if (matching_method_ == MatchingMethod::kMatchingMethodPclNdt) {
+        // pcl ndt
+        Mat4f Tw2 = kf2->opti_pose_1_.matrix().cast<float>();
+        pcl::NormalDistributionsTransform<PointType, PointType> ndt;
+
+        ndt.setTransformationEpsilon(0.05);
+        ndt.setStepSize(0.7);
+        ndt.setMaximumIterations(40);
+
+        /// 不同分辨率下的匹配
+        CloudPtr output(new PointCloudType);
+        for (auto& r : res) {
+            ndt.setResolution(r);
+            auto rough_map1 = VoxelCloud(submap_kf1, r * 0.1);
+            auto rough_map2 = VoxelCloud(submap_kf2, r * 0.1);
+            ndt.setInputTarget(rough_map1);
+            ndt.setInputSource(rough_map2);
+
+            // Call the registration algorithm which estimates the transformation and returns the transformed source (input) as output.
+            ndt.align(*output, Tw2);
+            Tw2 = ndt.getFinalTransformation();
+        }
+
+        ndt_score = ndt.getTransformationProbability();
+
+        Mat4d T = Tw2.cast<double>();
+        Quatd q(T.block<3, 3>(0, 0));
+        q.normalize();
+        Vec3d t = T.block<3, 1>(0, 3);
+        T2 = SE3(q, t);
+
+        LOG(INFO) << "pcl ndt score:" << ndt_score;
+    } else if (matching_method_ == MatchingMethod::kMatchingMethodSadNdt) {
+        // sad ndt
+        std::shared_ptr<Ndt3d> last_ndt;
+
+        SE3 Tw2 = kf2->opti_pose_1_;
+        for (auto& r : res) {
+            Ndt3d::Options option;
+            option.voxel_size_ = r;
+            auto ndt = std::make_shared<Ndt3d>(option);
+            last_ndt = ndt;
+            auto rough_map1 = VoxelCloud(submap_kf1, r * 0.1);
+            auto rough_map2 = VoxelCloud(submap_kf2, r * 0.1);
+
+            ndt->SetTarget(rough_map1);
+            ndt->SetSource(rough_map2);
+
+            auto success = ndt->AlignNdt(Tw2);
+            if (success == false) {
+                LOG(WARNING) << "sad ndt align failed";
+            }
+        }
+
+        ndt_score = last_ndt->GetMatchingScore();
+        T2 = Tw2;
+
+        LOG(INFO) << "sad ndt score:" << ndt_score;
+    } else {
+        // FIXME:
+        LOG(INFO) << "bad matching method " << matching_method_;
     }
 
-    Mat4d T = Tw2.cast<double>();
-    Quatd q(T.block<3, 3>(0, 0));
-    q.normalize();
-    Vec3d t = T.block<3, 1>(0, 3);
-    c.Tij_ = kf1->opti_pose_1_.inverse() * SE3(q, t);
-    c.ndt_score_ = ndt.getTransformationProbability();
+    c.Tij_ = kf1->opti_pose_1_.inverse() * T2;
+    c.ndt_score_ = ndt_score;
 }
 
 void LoopClosure::SaveResults() {

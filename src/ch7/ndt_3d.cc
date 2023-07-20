@@ -134,6 +134,29 @@ bool Ndt3d::AlignNdt(SE3& init_pose) {
             }
         });
 
+        // calc matching score
+        matching_score_ = 0;
+        int count=0;
+        // first of nearby_grids_ is origin
+        for (int i = 0; i < total_size; i += nearby_grids_.size()) {
+            if (effect_pts[i] == false) {
+                continue;
+            }
+            auto e = errors[i];
+            auto info = infos[i];
+
+            double x = e.transpose() * info * e;
+            double p = exp(-x/2);
+            matching_score_ += p;
+            count++;
+        }
+#if 0
+        LOG(INFO) << "valid count " << count;
+        if (count) {
+            matching_score_/=count;
+        }
+#endif
+
         // 累加Hessian和error,计算dx
         // 原则上可以用reduce并发，写起来比较麻烦，这里写成accumulate
         double total_res = 0;
@@ -186,6 +209,11 @@ bool Ndt3d::AlignNdt(SE3& init_pose) {
 
     init_pose = pose;
     return true;
+}
+
+double Ndt3d::GetMatchingScore()
+{
+    return matching_score_;
 }
 
 void Ndt3d::GenerateNearbyGrids() {
