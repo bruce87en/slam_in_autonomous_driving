@@ -84,6 +84,9 @@ class Ndt3d {
 
     double GetMatchingScore();
 
+    bool SaveToFile(std::string&& path);
+    bool LoadFromFile(std::string&& path);
+
    private:
     void BuildVoxels();
 

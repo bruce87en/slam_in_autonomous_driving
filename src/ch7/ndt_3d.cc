@@ -8,6 +8,11 @@
 #include <glog/logging.h>
 #include <Eigen/SVD>
 #include <execution>
+#include <fstream>
+// #include <nlohmann/json.hpp>
+#include "json.hpp"
+
+using json = nlohmann::json;
 
 namespace sad {
 
@@ -214,6 +219,102 @@ bool Ndt3d::AlignNdt(SE3& init_pose) {
 double Ndt3d::GetMatchingScore()
 {
     return matching_score_;
+}
+
+bool Ndt3d::SaveToFile(std::string&& path)
+{
+    json j;
+
+    j["option"] = {
+        { "max_iteration", options_.max_iteration_},
+        { "voxel_size", options_.voxel_size_},
+        // { "inv_voxel_size", options_.inv_voxel_size_},
+        { "min_effective_pts", options_.min_effective_pts_},
+        { "min_pts_in_voxel", options_.min_pts_in_voxel_},
+        { "eps", options_.eps_},
+        { "res_outlier_th", options_.res_outlier_th_},
+        { "remove_centroid", options_.remove_centroid_},
+        { "nearby_type", options_.nearby_type_},
+    };
+
+    json j_grids = json::array();
+    for (auto & grid : grids_) {
+        auto& key = grid.first;
+        auto& voxel_data = grid.second;
+
+        std::vector<double> mu(voxel_data.mu_.data(),
+                voxel_data.mu_.data()+voxel_data.mu_.size());
+        std::vector<double> sigma(voxel_data.sigma_.data(),
+                voxel_data.sigma_.data()+voxel_data.sigma_.size());
+        std::vector<double> info(voxel_data.info_.data(),
+                voxel_data.info_.data()+voxel_data.info_.size());
+        json j_grid = {
+            {"key", json::array({key[0], key[1], key[2]})},
+            {"voxel_data", {
+                {"idx", voxel_data.idx_},
+                {"mu", mu},
+                {"sigma", sigma},
+                {"info", info},
+            }},
+        };
+
+        j_grids.push_back(j_grid);
+    }
+
+    json j_points = json::array();
+    for (auto &pt : target_->points) {
+        json j_point = json::array({
+            pt.x, pt.y, pt.z, pt.intensity
+        });
+        j_points.push_back(j_point);
+    }
+
+    j["grids"] = j_grids;
+    j["target_center"] = json::array({
+        target_center_[0],
+        target_center_[1],
+        target_center_[2],
+    });
+    j["target"] = j_points;
+
+#if 1
+    std::ofstream o(path + ".json");
+    o << std::setw(4) << j << std::endl;
+    o.close();
+#endif
+
+    std::vector<std::uint8_t> v_cbor = json::to_cbor(j);
+
+    std::ofstream o_cbor(path, std::ios::out | std::ios::binary | std::ios::trunc);
+    o_cbor.write((char *)v_cbor.data(), v_cbor.size());
+    o_cbor.close();
+
+    return true;
+}
+
+bool Ndt3d::LoadFromFile(std::string&& path)
+{
+    std::ifstream instream(path, std::ios::in | std::ios::binary);
+    if (instream.is_open()) {
+        LOG(ERROR) << "can not open " << path;
+        return false;
+    }
+
+    std::istreambuf_iterator<char> fs_begin(instream), end;
+    std::vector<std::uint8_t> data(fs_begin, end);
+
+    if (!data.size()) {
+        LOG(ERROR) << "file empty " << path;
+        return false;
+    }
+
+    grids_.clear();
+    CloudPtr cloud(new PointCloudType);
+    Options option;
+
+    json j = json::from_cbor(data);
+
+    return true;
 }
 
 void Ndt3d::GenerateNearbyGrids() {

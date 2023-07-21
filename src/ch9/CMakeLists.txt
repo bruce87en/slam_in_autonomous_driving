@@ -54,3 +54,11 @@ target_link_libraries(split_map
         ${third_party_libs}
         las
         )
+
+add_executable(split_ndt_map split_ndt_map.cc)
+target_link_libraries(split_ndt_map
+        ${PROJECT_NAME}.ch9
+        ${PROJECT_NAME}.common
+        ${third_party_libs}
+        las
+        )
