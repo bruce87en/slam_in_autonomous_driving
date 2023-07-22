@@ -15,7 +15,7 @@
 using json = nlohmann::json;
 
 #define NDT_SAVE_POINTCLOUD         1
-#define DUMP_DEBUG_TEXT_JSON        1
+#define DUMP_DEBUG_TEXT_JSON        0
 
 namespace sad {
 
@@ -383,12 +383,38 @@ bool Ndt3d::LoadFromFile(std::string&& path)
     target_ = cloud;
 
     return true;
+} 
+
+Ndt3d::KeyType Ndt3d::DumpFirstVoxelInfo(std::string&& prefix)
+{
+    auto iter = grids_.begin();
+    if (iter == grids_.end()) {
+        return KeyType();
+    }
+
+    auto& key = iter->first;
+    auto& voxel_data = iter->second;
+
+    LOG(INFO) << prefix
+        << " grids num:" << grids_.size()
+        << " key:" << key.transpose() << "\n"
+        << " mu:" << voxel_data.mu_.transpose() << "\n"
+        << " sigma:\n" << voxel_data.sigma_ << "\n"
+        << " info:\n" << voxel_data.info_ << "\n";
+
+    return key;
 }
 
-void Ndt3d::DumpFirstVoxelInfo(std::string&& prefix)
+void Ndt3d::DumpVoxelInfo(std::string&& prefix, KeyType &voxel_key)
 {
-    auto& key = grids_.begin()->first;
-    auto& voxel_data = grids_.begin()->second;
+    auto iter = grids_.find(voxel_key);
+    if (iter == grids_.end()) {
+        return;
+    }
+
+    auto& key = iter->first;
+    auto& voxel_data = iter->second;
+
     LOG(INFO) << prefix
         << " grids num:" << grids_.size()
         << " key:" << key.transpose() << "\n"

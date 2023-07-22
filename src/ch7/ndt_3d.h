@@ -87,7 +87,8 @@ class Ndt3d {
     bool SaveToFile(std::string&& path);
     bool LoadFromFile(std::string&& path);
 
-    void DumpFirstVoxelInfo(std::string&& prefix);
+    KeyType DumpFirstVoxelInfo(std::string&& prefix);
+    void DumpVoxelInfo(std::string&& prefix, KeyType &voxel_key);
 
    private:
     void BuildVoxels();

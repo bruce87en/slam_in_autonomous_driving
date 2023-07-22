@@ -17,6 +17,8 @@
 #include "common/point_cloud_utils.h"
 #include "ch7/ndt_3d.h"
 
+// #define DEBUG_NDT_LOAD_AND_SAVE     1
+
 DEFINE_string(map_path, "./data/ch9/", "导出数据的目录");
 DEFINE_double(voxel_size, 0.1, "导出地图分辨率");
 
@@ -115,13 +117,13 @@ int main(int argc, char** argv) {
         ndt.SetTarget(dp.second);
         ndt.SaveToFile(file_prefix + ".ndt");
 
-        #if 1
+        #if DEBUG_NDT_LOAD_AND_SAVE
         Ndt3d ndt_reload;
         ndt_reload.LoadFromFile(file_prefix + ".ndt");
         ndt_reload.SaveToFile(file_prefix + ".ndt.debug");
 
-        ndt.DumpFirstVoxelInfo("saved first voxel data");
-        ndt_reload.DumpFirstVoxelInfo("reload first voxel data");
+        auto voxel_key = ndt.DumpFirstVoxelInfo("saved first voxel data");
+        ndt_reload.DumpVoxelInfo("reload first voxel data", voxel_key);
         #endif
     }
     fout.close();
