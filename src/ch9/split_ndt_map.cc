@@ -114,6 +114,15 @@ int main(int argc, char** argv) {
         Ndt3d ndt;
         ndt.SetTarget(dp.second);
         ndt.SaveToFile(file_prefix + ".ndt");
+
+        #if 1
+        Ndt3d ndt_reload;
+        ndt_reload.LoadFromFile(file_prefix + ".ndt");
+        ndt_reload.SaveToFile(file_prefix + ".ndt.debug");
+
+        ndt.DumpFirstVoxelInfo("saved first voxel data");
+        ndt_reload.DumpFirstVoxelInfo("reload first voxel data");
+        #endif
     }
     fout.close();
 

@@ -14,6 +14,9 @@
 
 using json = nlohmann::json;
 
+#define NDT_SAVE_POINTCLOUD         1
+#define DUMP_DEBUG_TEXT_JSON        1
+
 namespace sad {
 
 void Ndt3d::BuildVoxels() {
@@ -242,12 +245,19 @@ bool Ndt3d::SaveToFile(std::string&& path)
         auto& key = grid.first;
         auto& voxel_data = grid.second;
 
-        std::vector<double> mu(voxel_data.mu_.data(),
-                voxel_data.mu_.data()+voxel_data.mu_.size());
-        std::vector<double> sigma(voxel_data.sigma_.data(),
-                voxel_data.sigma_.data()+voxel_data.sigma_.size());
-        std::vector<double> info(voxel_data.info_.data(),
-                voxel_data.info_.data()+voxel_data.info_.size());
+        std::vector<double> mu;
+        std::vector<double> sigma;
+        std::vector<double> info;
+
+        mu.resize(voxel_data.mu_.size());
+        Eigen::Map<Vec3d>(mu.data()) = voxel_data.mu_;
+
+        sigma.resize(voxel_data.sigma_.size());
+        Eigen::Map<Mat3d>(sigma.data()) = voxel_data.sigma_;
+
+        info.resize(voxel_data.info_.size());
+        Eigen::Map<Mat3d>(info.data()) = voxel_data.info_;
+        
         json j_grid = {
             {"key", json::array({key[0], key[1], key[2]})},
             {"voxel_data", {
@@ -260,7 +270,9 @@ bool Ndt3d::SaveToFile(std::string&& path)
 
         j_grids.push_back(j_grid);
     }
+    j["grids"] = j_grids;
 
+#if NDT_SAVE_POINTCLOUD
     json j_points = json::array();
     for (auto &pt : target_->points) {
         json j_point = json::array({
@@ -268,16 +280,15 @@ bool Ndt3d::SaveToFile(std::string&& path)
         });
         j_points.push_back(j_point);
     }
-
-    j["grids"] = j_grids;
     j["target_center"] = json::array({
         target_center_[0],
         target_center_[1],
         target_center_[2],
     });
-    j["target"] = j_points;
+    j["points"] = j_points;
+#endif
 
-#if 1
+#if DUMP_DEBUG_TEXT_JSON
     std::ofstream o(path + ".json");
     o << std::setw(4) << j << std::endl;
     o.close();
@@ -295,7 +306,7 @@ bool Ndt3d::SaveToFile(std::string&& path)
 bool Ndt3d::LoadFromFile(std::string&& path)
 {
     std::ifstream instream(path, std::ios::in | std::ios::binary);
-    if (instream.is_open()) {
+    if (!instream.is_open()) {
         LOG(ERROR) << "can not open " << path;
         return false;
     }
@@ -310,11 +321,80 @@ bool Ndt3d::LoadFromFile(std::string&& path)
 
     grids_.clear();
     CloudPtr cloud(new PointCloudType);
-    Options option;
+    Options options;
 
     json j = json::from_cbor(data);
 
+    json j_option = j["option"];
+    options.max_iteration_ = j_option["max_iteration"].template get<int>();
+    options.voxel_size_ = j_option["voxel_size"].template get<double>();
+    options.min_effective_pts_ = j_option["min_effective_pts"].template get<int>();
+    options.min_pts_in_voxel_ = j_option["min_pts_in_voxel"].template get<int>();
+    options.eps_ = j_option["eps"].template get<double>();
+    options.res_outlier_th_ = j_option["res_outlier_th"].template get<double>();
+    options.remove_centroid_ = j_option["remove_centroid"].template get<bool>();
+    options.nearby_type_ = j_option["nearby_type"].template get<NearbyType>();
+
+    json j_grids = j["grids"];
+    for (auto & j_grid : j_grids) {
+        std::vector<int> key_data = j_grid["key"].template get<std::vector<int>>();
+
+        json j_voxel_data = j_grid["voxel_data"];
+        std::vector<size_t> idx = j_voxel_data["idx"].template get<std::vector<size_t>>();
+        std::vector<double> mu_data = j_voxel_data["mu"].template get<std::vector<double>>();
+        std::vector<double> sigma_data = j_voxel_data["sigma"].template get<std::vector<double>>();
+        std::vector<double> info_data = j_voxel_data["info"].template get<std::vector<double>>();
+
+        KeyType key(key_data[0], key_data[1], key_data[2]);
+        // Vec3d mu = Vec3d::Map(mu_data.data(), mu_data.size());
+        Vec3d mu = Eigen::Map<Vec3d>(mu_data.data());
+        Mat3d sigma = Eigen::Map<Mat3d>(sigma_data.data());
+        Mat3d info = Eigen::Map<Mat3d>(info_data.data());
+
+        VoxelData voxel_data;
+        voxel_data.idx_ = std::move(idx);
+        voxel_data.mu_ = mu;
+        voxel_data.sigma_ = sigma;
+        voxel_data.info_ = info;
+
+        grids_.insert({key, voxel_data});
+    }
+
+#if NDT_SAVE_POINTCLOUD
+    json j_points = j["points"];
+    for (auto& j_pt : j_points) {
+        std::vector<float> pt = j_pt.template get<std::vector<float>>();
+        PointType point;
+        point.x = pt[0];
+        point.y = pt[1];
+        point.z = pt[2];
+        point.intensity = pt[3];
+
+        cloud->points.push_back(point);
+    }
+    std::vector<double> center = j["target_center"].template get<std::vector<double>>();
+    target_center_ = Vec3d(center[0], center[1], center[2]);
+    LOG(INFO) << "load point count " << cloud->points.size();
+#endif
+
+    options_ = options;
+    options_.inv_voxel_size_ = 1.0 / options_.voxel_size_;
+    GenerateNearbyGrids();
+    target_ = cloud;
+
     return true;
+}
+
+void Ndt3d::DumpFirstVoxelInfo(std::string&& prefix)
+{
+    auto& key = grids_.begin()->first;
+    auto& voxel_data = grids_.begin()->second;
+    LOG(INFO) << prefix
+        << " grids num:" << grids_.size()
+        << " key:" << key.transpose() << "\n"
+        << " mu:" << voxel_data.mu_.transpose() << "\n"
+        << " sigma:\n" << voxel_data.sigma_ << "\n"
+        << " info:\n" << voxel_data.info_ << "\n";
 }
 
 void Ndt3d::GenerateNearbyGrids() {
