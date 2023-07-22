@@ -15,6 +15,8 @@ namespace sad {
  */
 class Ndt3d {
    public:
+    using Ptr = std::shared_ptr<Ndt3d>;
+
     enum class NearbyType {
         CENTER,   // 只考虑中心
         NEARBY6,  // 上下左右前后
@@ -54,6 +56,12 @@ class Ndt3d {
         GenerateNearbyGrids();
     }
 
+    Ndt3d(double voxel_size) {
+        options_.voxel_size_ = voxel_size;
+        options_.inv_voxel_size_ = 1.0 / options_.voxel_size_;
+        GenerateNearbyGrids();
+    }
+
     /// 设置目标的Scan
     void SetTarget(CloudPtr target) {
         target_ = target;
@@ -63,6 +71,27 @@ class Ndt3d {
         target_center_ = std::accumulate(target->points.begin(), target_->points.end(), Vec3d::Zero().eval(),
                                          [](const Vec3d& c, const PointType& pt) -> Vec3d { return c + ToVec3d(pt); }) /
                          target_->size();
+    }
+
+    CloudPtr GetTargetCloud() {
+        return target_;
+    }
+
+    Ndt3d& operator+=(const Ndt3d& rhs)
+    {
+        // FIXME: calc target center
+        for (auto& [key, value]: rhs.grids_) {
+            grids_.insert({key, value});
+        }
+
+        if (target_ == nullptr) {
+            target_ = CloudPtr(new PointCloudType);
+        }
+        for (auto& pt : rhs.target_->points) {
+            target_->points.push_back(pt);
+        }
+
+        return *this;
     }
 
     /// 设置被配准的Scan

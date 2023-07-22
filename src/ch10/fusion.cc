@@ -7,6 +7,8 @@
 #include "common/lidar_utils.h"
 #include "fusion.h"
 
+#define NDT_MAP_MULTI_RESULOTION    0
+
 namespace sad {
 
 Fusion::Fusion(const std::string& config_yaml) {
@@ -15,6 +17,7 @@ Fusion::Fusion(const std::string& config_yaml) {
     imu_init_options.use_speed_for_static_checking_ = false;  // 本节数据不需要轮速计
     imu_init_ = StaticIMUInit(imu_init_options);
     ndt_.setResolution(1.0);
+    ndt_3d_ = std::make_shared<Ndt3d>(1.0); // 注意大小，目前默认是1.0
 }
 
 bool Fusion::Init() {
@@ -38,10 +41,15 @@ bool Fusion::Init() {
     Mat3d lidar_R_wrt_IMU = math::MatFromArray(ext_r);
     TIL_ = SE3(lidar_R_wrt_IMU, lidar_T_wrt_IMU);
 
+    int map_type = yaml["mapping"]["map_type"].as<int>();
+    map_type_ = (MapType)map_type;
+    LOG(INFO) << "map type" << map_type_;
+
     // ui
     ui_ = std::make_shared<ui::PangolinWindow>();
     ui_->Init();
     ui_->SetCurrentScanSize(50);
+
     return true;
 }
 
@@ -202,47 +210,120 @@ bool Fusion::SearchRTK() {
 }
 
 void Fusion::AlignForGrid(sad::Fusion::GridSearchResult& gr) {
-    /// 多分辨率
-    pcl::NormalDistributionsTransform<PointType, PointType> ndt;
-    ndt.setTransformationEpsilon(0.05);
-    ndt.setStepSize(0.7);
-    ndt.setMaximumIterations(40);
+    SE3 result_pose;
+    double score;
 
-    ndt.setInputSource(current_scan_);
-    auto map = ref_cloud_;
-
-    CloudPtr output(new PointCloudType);
     std::vector<double> res{10.0, 5.0, 4.0, 3.0};
-    Mat4f T = gr.pose_.matrix().cast<float>();
-    for (auto& r : res) {
-        auto rough_map = VoxelCloud(map, r * 0.1);
-        ndt.setInputTarget(rough_map);
-        ndt.setResolution(r);
-        ndt.align(*output, T);
-        T = ndt.getFinalTransformation();
+    if (map_type_ == kMapTypePcl) {
+        /// 多分辨率
+        pcl::NormalDistributionsTransform<PointType, PointType> ndt;
+        ndt.setTransformationEpsilon(0.05);
+        ndt.setStepSize(0.7);
+        ndt.setMaximumIterations(40);
+
+        ndt.setInputSource(current_scan_);
+        auto map = ref_cloud_;
+
+        CloudPtr output(new PointCloudType);
+        Mat4f T = gr.pose_.matrix().cast<float>();
+        for (auto& r : res) {
+            auto rough_map = VoxelCloud(map, r * 0.1);
+            ndt.setInputTarget(rough_map);
+            ndt.setResolution(r);
+            ndt.align(*output, T);
+            T = ndt.getFinalTransformation();
+        }
+
+        score = ndt.getTransformationProbability();
+        result_pose = Mat4ToSE3(ndt.getFinalTransformation());
+    } else if (map_type_ == kMapTypeNdt) {
+        result_pose = gr.pose_;
+
+        // FIXME: use ndt map
+        #if NDT_MAP_MULTI_RESULOTION
+        std::shared_ptr<Ndt3d> last_ndt;
+        auto cloud = ndt_3d_->GetTargetCloud();
+        for (auto& r : res) {
+            Ndt3d::Options option;
+            option.voxel_size_ = r;
+            auto ndt = std::make_shared<Ndt3d>(option);
+            last_ndt = ndt;
+            auto rough_map1 = VoxelCloud(cloud, r * 0.1);
+            auto rough_map2 = VoxelCloud(current_scan_, r * 0.1);
+
+            ndt->SetTarget(rough_map1);
+            ndt->SetSource(rough_map2);
+
+            auto success = ndt->AlignNdt(result_pose);
+            if (success == false) {
+                LOG(WARNING) << "sad ndt align failed";
+            }
+        }
+
+        score = last_ndt->GetMatchingScore();
+        #else
+        auto rough_map = VoxelCloud(current_scan_, 0.1);
+        ndt_3d_->SetSource(rough_map);
+        auto success = ndt_3d_->AlignNdt(result_pose);
+        if (success == false) {
+            LOG(WARNING) << "sad ndt align failed";
+        }
+        score = ndt_3d_->GetMatchingScore();
+        #endif
+    } else {
+        LOG(ERROR) << "bad map type " << map_type_;
     }
 
-    gr.score_ = ndt.getTransformationProbability();
-    gr.result_pose_ = Mat4ToSE3(ndt.getFinalTransformation());
+    gr.score_ = score;
+    gr.result_pose_ = result_pose;
 }
 
 bool Fusion::LidarLocalization() {
+    double loc_score;
+    SE3 pose;
     SE3 pred = eskf_.GetNominalSE3();
     LoadMap(pred);
 
-    ndt_.setInputCloud(current_scan_);
-    CloudPtr output(new PointCloudType);
-    ndt_.align(*output, pred.matrix().cast<float>());
+    if (map_type_ == kMapTypePcl) {
+        ndt_.setInputCloud(current_scan_);
+        CloudPtr output(new PointCloudType);
+        ndt_.align(*output, pred.matrix().cast<float>());
 
-    SE3 pose = Mat4ToSE3(ndt_.getFinalTransformation());
+        pose = Mat4ToSE3(ndt_.getFinalTransformation());
+        loc_score = ndt_.getTransformationProbability();
+    } else if (map_type_ == kMapTypeNdt) {
+        ndt_3d_->SetSource(current_scan_);
+
+        pose = pred;
+        auto success = ndt_3d_->AlignNdt(pose);
+        if (success == false) {
+            LOG(WARNING) << "sad ndt align failed";
+        }
+
+        loc_score = ndt_3d_->GetMatchingScore();
+    } else {
+        LOG(ERROR) << "bad map type " << map_type_;
+        return false;
+    }
+
     eskf_.ObserveSE3(pose, 1e-1, 1e-2);
 
-    LOG(INFO) << "lidar loc score: " << ndt_.getTransformationProbability();
+    LOG(INFO) << "lidar loc score: " << loc_score;
 
     return true;
 }
 
 void Fusion::LoadMap(const SE3& pose) {
+    if (map_type_ == kMapTypePcl) {
+        LoadPclMap(pose);
+    } else if (map_type_ == kMapTypeNdt) {
+        LoadNdtMap(pose);
+    } else {
+        LOG(ERROR) << "bad map type" << map_type_;
+    }
+}
+
+void Fusion::LoadPclMap(const SE3& pose) {
     int gx = floor((pose.translation().x() - 50.0) / 100);
     int gy = floor((pose.translation().y() - 50.0) / 100);
     Vec2i key(gx, gy);
@@ -297,6 +378,66 @@ void Fusion::LoadMap(const SE3& pose) {
     }
 
     ui_->UpdatePointCloudGlobal(map_data_);
+}
+
+void Fusion::LoadNdtMap(const SE3& pose)
+{
+    int gx = floor((pose.translation().x() - 50.0) / 100);
+    int gy = floor((pose.translation().y() - 50.0) / 100);
+    Vec2i key(gx, gy);
+
+    // 一个区域的周边地图，我们认为9个就够了
+    std::set<Vec2i, less_vec<2>> surrounding_index{
+        key + Vec2i(0, 0), key + Vec2i(-1, 0), key + Vec2i(-1, -1), key + Vec2i(-1, 1), key + Vec2i(0, -1),
+        key + Vec2i(0, 1), key + Vec2i(1, 0),  key + Vec2i(1, -1),  key + Vec2i(1, 1),
+    };
+
+    // 加载必要区域
+    bool map_data_changed = false;
+    int cnt_new_loaded = 0, cnt_unload = 0;
+    for (auto& k : surrounding_index) {
+        if (map_data_index_.find(k) == map_data_index_.end()) {
+            // 该地图数据不存在
+            continue;
+        }
+
+        if (ndt_map_data_.find(k) == ndt_map_data_.end()) {
+            // 加载这个区块
+            Ndt3d::Ptr ndt_3d = std::make_shared<Ndt3d>();
+            ndt_3d->LoadFromFile(data_path_ + std::to_string(k[0]) + "_" + std::to_string(k[1]) + ".ndt");
+            ndt_map_data_.emplace(k, ndt_3d);
+            map_data_changed = true;
+            cnt_new_loaded++;
+        }
+    }
+
+    // 卸载不需要的区域，这个稍微加大一点，不需要频繁卸载
+    for (auto iter = ndt_map_data_.begin(); iter != ndt_map_data_.end();) {
+        if ((iter->first - key).cast<float>().norm() > 3.0) {
+            // 卸载本区块
+            iter = ndt_map_data_.erase(iter);
+            cnt_unload++;
+            map_data_changed = true;
+        } else {
+            iter++;
+        }
+    }
+
+    LOG(INFO) << "new loaded: " << cnt_new_loaded << ", unload: " << cnt_unload;
+    std::map<Vec2i, CloudPtr, less_vec<2>> map_data;
+    if (map_data_changed) {
+        // rebuild ndt target map
+        // ref_cloud_.reset(new PointCloudType);
+        ndt_3d_ = std::make_shared<Ndt3d>(1.0);
+        for (auto& mp : ndt_map_data_) {
+            *ndt_3d_ += *mp.second;
+            map_data.insert({mp.first, mp.second->GetTargetCloud()});
+        }
+
+        LOG(INFO) << "rebuild global cloud, grids: " << ndt_map_data_.size();
+    }
+
+    ui_->UpdatePointCloudGlobal(map_data);
 }
 
 void Fusion::LoadMapIndex() {

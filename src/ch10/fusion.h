@@ -13,6 +13,7 @@
 #include "common/message_def.h"
 #include "common/point_types.h"
 
+#include "ch7/ndt_3d.h"
 #include "ch7/loosely_coupled_lio/cloud_convert.h"
 #include "ch7/loosely_coupled_lio/measure_sync.h"
 
@@ -32,6 +33,11 @@ class Fusion {
    public:
     explicit Fusion(const std::string& config_yaml);
 
+    enum MapType {
+        kMapTypePcl = 1,
+        kMapTypeNdt = 2,
+    };
+
     enum class Status {
         WAITING_FOR_RTK,  // 等待初始的RTK
         WORKING,          // 正常工作
@@ -48,6 +54,8 @@ class Fusion {
    private:
     /// 读取某个点附近的地图
     void LoadMap(const SE3& pose);
+    void LoadPclMap(const SE3& pose);
+    void LoadNdtMap(const SE3& pose);
 
     /// 处理同步之后的IMU和雷达数据
     void ProcessMeasurements(const MeasureGroup& meas);
@@ -93,6 +101,7 @@ class Fusion {
     std::string data_path_;                            // 地图数据目录
     std::set<Vec2i, less_vec<2>> map_data_index_;      // 哪些格子存在地图数据
     std::map<Vec2i, CloudPtr, less_vec<2>> map_data_;  // 第9章建立的地图数据
+    std::map<Vec2i, Ndt3d::Ptr, less_vec<2>> ndt_map_data_;
 
     std::shared_ptr<MessageSync> sync_ = nullptr;  // 消息同步器
     StaticIMUInit imu_init_;                       // IMU静止初始化
@@ -115,12 +124,15 @@ class Fusion {
     bool imu_need_init_ = true;     // 是否需要估计IMU初始零偏
     CloudPtr ref_cloud_ = nullptr;  // NDT用于参考的点云
     pcl::NormalDistributionsTransform<PointType, PointType> ndt_;
+    std::shared_ptr<Ndt3d> ndt_3d_;
 
     /// 参数
     double rtk_search_min_score_ = 4.5;
 
     // ui
     std::shared_ptr<ui::PangolinWindow> ui_ = nullptr;
+
+    MapType map_type_{kMapTypePcl};
 };
 
 }  // namespace sad
