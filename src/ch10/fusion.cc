@@ -7,7 +7,7 @@
 #include "common/lidar_utils.h"
 #include "fusion.h"
 
-#define NDT_MAP_MULTI_RESULOTION    0
+#define NDT_MAP_MULTI_RESULOTION    1
 
 namespace sad {
 
@@ -424,20 +424,21 @@ void Fusion::LoadNdtMap(const SE3& pose)
     }
 
     LOG(INFO) << "new loaded: " << cnt_new_loaded << ", unload: " << cnt_unload;
-    std::map<Vec2i, CloudPtr, less_vec<2>> map_data;
+    // std::map<Vec2i, CloudPtr, less_vec<2>> map_data;
     if (map_data_changed) {
         // rebuild ndt target map
         // ref_cloud_.reset(new PointCloudType);
+        map_data_.clear();
         ndt_3d_ = std::make_shared<Ndt3d>(1.0);
         for (auto& mp : ndt_map_data_) {
             *ndt_3d_ += *mp.second;
-            map_data.insert({mp.first, mp.second->GetTargetCloud()});
+            map_data_.insert({mp.first, mp.second->GetTargetCloud()});
         }
 
         LOG(INFO) << "rebuild global cloud, grids: " << ndt_map_data_.size();
     }
 
-    ui_->UpdatePointCloudGlobal(map_data);
+    ui_->UpdatePointCloudGlobal(map_data_);
 }
 
 void Fusion::LoadMapIndex() {

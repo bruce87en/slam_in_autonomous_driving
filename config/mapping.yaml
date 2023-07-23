@@ -15,11 +15,13 @@ lidar_continuous_num: 5
 rtk_ext:
   t: [0, 0.24, -0.283]
 loop_closing:
-  matching_method: 2 # 1.PCL NDT 2. SAD NDT
+  # 1.PCL NDT 2. SAD NDT
+  matching_method: 2
   min_id_interval: 100
   min_distance: 30
   skip_id: 5
-  ndt_score_th: 4.5
+  # ndt_score_th: 4.5
+  ndt_score_th: 300
 common:
   dataset: nclt
   lid_topic: points_raw
@@ -33,7 +35,8 @@ mapping:
   extrinsic_est_en: true
   extrinsic_T: [0, 0, 0.28]
   extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
-  map_type: 1 # 1:PCL 2:NDT
+  # 1:PCL 2:NDT
+  map_type: 2
 point_filter_num: 3
 max_iteration: 10
 imu_has_gravity: true
