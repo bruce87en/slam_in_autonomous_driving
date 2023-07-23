@@ -284,10 +284,16 @@ bool Fusion::LidarLocalization() {
     SE3 pred = eskf_.GetNominalSE3();
     LoadMap(pred);
 
+    double total_time = 0;
+
     if (map_type_ == kMapTypePcl) {
         ndt_.setInputCloud(current_scan_);
         CloudPtr output(new PointCloudType);
+        auto t1 = std::chrono::high_resolution_clock::now();
         ndt_.align(*output, pred.matrix().cast<float>());
+        auto t2 = std::chrono::high_resolution_clock::now();
+        total_time = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1).count() * 1000;
+        LOG(INFO) << "pcl ndt take " << total_time;
 
         pose = Mat4ToSE3(ndt_.getFinalTransformation());
         loc_score = ndt_.getTransformationProbability();
@@ -295,10 +301,15 @@ bool Fusion::LidarLocalization() {
         ndt_3d_->SetSource(current_scan_);
 
         pose = pred;
+        
+        auto t1 = std::chrono::high_resolution_clock::now();
         auto success = ndt_3d_->AlignNdt(pose);
         if (success == false) {
             LOG(WARNING) << "sad ndt align failed";
         }
+        auto t2 = std::chrono::high_resolution_clock::now();
+        total_time = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1).count() * 1000;
+        LOG(INFO) << "sad ndt take " << total_time;
 
         loc_score = ndt_3d_->GetMatchingScore();
     } else {
